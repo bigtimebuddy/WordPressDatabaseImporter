@@ -1,0 +1,187 @@
+#!/bin/bash
+
+echo ;
+echo ;
+echo "+---------------------------------------------+";
+echo "|       WORDPRESS DATABASE IMPORTER v 1.0     |";
+echo "+---------------------------------------------+";
+echo ;
+
+#-----------------------------------------------------------------
+#  Check the first argument before anything else
+#
+if [ ! "$1" ]; then
+	echo "The first argument must be the path to the source sql database file! For instance, './WordPressDatabaseImporter my_data.sql'";
+	echo ;
+	exit 1;
+fi
+
+if [ "${1##*.}" != "sql" ]; then
+	echo "The source file '${1}' needs to be a sql file (ends with '.sql').";
+	echo ;
+	exit 5
+fi
+
+if [ ! -f "$1" ]; then
+	echo "The file '${1}' doesn't exist!";
+	echo ;
+	exit 2;
+fi
+
+#-----------------------------------------------------------------
+#  Check for configuration file
+#  The default configuration file
+CONF=WordPressDatabaseImporter.conf
+
+# Use the custom configuration if we have it
+if [[ "$2" && -f "$2" ]]; then
+	CONF=$2;
+fi
+
+if [ ! -f "$CONF" ]; then
+	
+	echo ;
+	echo "Configuration file not found, so we'll create one...";
+	echo ;
+	echo "+--------------------------------------------+";
+	echo "|            CONFIGURATION SETUP             |";
+	echo "+--------------------------------------------+";
+	echo ;
+	echo "What is the WordPress 'siteurl' of where you want to install the database? Please exclude any: http://, www, or trailing-slashes. For instance, 'mydomain.com' or 'localhost/user/localsite'"
+	read SITE_URL
+	if [ ! "$SITE_URL" ]; then
+		echo "No target site url supplied. Canceling."
+		exit 3;
+	fi
+	echo ;
+	echo "Who is the MySQL user for the target database?"
+	read MYSQL_USER
+	
+	if [ ! "$MYSQL_USER" ]; then
+		echo "No MySQL user supplied. Canceling."
+		exit 3;
+	fi
+	echo ;
+	echo "What is the password for '${MYSQL_USER}' for the target database?"
+	read MYSQL_PASS
+	echo ;
+	echo "What is the database name?"
+	read MYSQL_DB
+	if [ ! "$MYSQL_DB" ]; then
+		echo "No MySQL database supplied. Canceling."
+		exit 3;
+	fi
+	echo ;
+	echo "What is the target database host (e.g., localhost, mysql.mysite.com)?"
+	read MYSQL_HOST
+	if [ ! "$MYSQL_HOST" ]; then
+		echo "No MySQL host supplied. Canceling."
+		exit 3;
+	fi
+	echo ;
+	echo "Where is the mysql executable? In most cases this is simply mysql, but if you have a custom path to mysql, use that (e.g., /Applications/XAMPP/xamppfiles/bin/mysql)"
+	read PATH_TO_MYSQL
+	if [ ! "$PATH_TO_MYSQL" ]; then
+		echo "No MySQL executible provided. Canceling."
+		exit 3;
+	fi
+	echo ;
+	echo "Where is target WordPress table prefix? This is the prefix that comes before all WordPress tables. It can be found in wp-config.php in the WordPress folder."
+	read WP_PREFIX
+	if [ ! "$WP_PREFIX" ]; then
+		echo "No WordPress table prefix provided. Canceling."
+		exit 3;
+	fi
+	
+	echo -e "SITE_URL=$SITE_URL
+MYSQL_USER=$MYSQL_USER
+MYSQL_PASS=$MYSQL_PASS
+MYSQL_DB=$MYSQL_DB
+MYSQL_HOST=$MYSQL_HOST
+PATH_TO_MYSQL=$PATH_TO_MYSQL
+WP_PREFIX=$WP_PREFIX" > $CONF;
+fi
+
+# Import config
+source $CONF;
+
+regex="('siteurl', ?'https?\:\/\/(www\.)?([^']*)')"
+file=$(<${1})
+
+#-----------------------------------------------------------------
+#  Search for a siteurl in the output
+#
+if [[ $file =~ $regex ]]; then
+	i=1
+	n=${#BASH_REMATCH[*]}
+	while [[ $i -lt $n ]]
+	do
+	if [ "$i" = "3" ]; then
+		FILE_DOMAIN=${BASH_REMATCH[$i]};
+	fi
+		let i++
+	done
+else
+	
+	#  Check for a site url or else, ask for it
+	if [ ! "$FILE_DOMAIN" ]; then
+		echo ;
+		echo "What is the WordPress 'siteurl' for '${1}'? Please exclude any: http://, www, or trailing-slashes."
+		read FILE_DOMAIN
+		if [ ! "$FILE_DOMAIN" ]; then
+			echo "No domain supplied. Canceling import."
+			exit 3;
+		fi
+	fi
+fi
+
+#-----------------------------------------------------------------
+# Extract the table prefix
+#
+regex="\`([a-zA-Z0-9_\-]*)term_relationships\`"
+
+if [[ $file =~ $regex ]]; then
+	i=1
+	n=${#BASH_REMATCH[*]}
+	while [[ $i -lt $n ]]
+	do
+	if [ "$i" = "1" ]; then
+		FILE_TABLE_PREFIX=${BASH_REMATCH[$i]};
+	fi
+		let i++
+	done
+else
+	
+	#  Check for a table prefix or else, ask for it
+	if [ ! "$FILE_TABLE_PREFIX" ]; then
+		echo ;
+		echo "What is the WordPress table prefix for '${1}'?"
+		read FILE_TABLE_PREFIX
+		if [ ! "$FILE_TABLE_PREFIX" ]; then
+			echo "No prefix supplied. Canceling import."
+			exit 4;
+		fi
+	fi
+fi
+
+#-----------------------------------------------------------------
+#  Let's import!
+#
+echo ;
+echo "Copying the SQL file...";
+cp $1 temp.sql
+echo "Replacing domain occurrences...";
+sed -ie 's|'www.${FILE_DOMAIN}'|'${SITE_URL}'|g' temp.sql
+sed -ie 's|'${FILE_DOMAIN}'|'${SITE_URL}'|g' temp.sql
+#sed -id 's/utf8/latin1/g' temp.sql
+if [ "${FILE_TABLE_PREFIX}" != "${WP_PREFIX}" ]; then
+	echo "Replacing the table prefix...";
+	sed -ie 's/'${FILE_TABLE_PREFIX}'/'${WP_PREFIX}'/g' temp.sql
+fi
+echo "Importing to MySQL...";
+${PATH_TO_MYSQL} --default-character-set=utf8 --user=${MYSQL_USER} --password=${MYSQL_PASS} --host=${MYSQL_HOST} --port=3306 ${MYSQL_DB} < temp.sql
+echo "Cleaning up...";
+rm temp.sql
+rm temp.sqle
+echo "Done!";
+echo ;
